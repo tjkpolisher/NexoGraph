@@ -1,0 +1,56 @@
+# Environment
+.env
+.env.local
+*.env
+.claude
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Conda
+# 환경 자체는 제외하지 않음 (environment.yml로 재현 가능)
+
+# Virtualenv (혹시 사용하는 경우)
+venv/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Data (큰 파일)
+data/uploads/*
+data/parsed/*
+data/db/*
+data/lightrag/*
+!data/uploads/.gitkeep
+!data/parsed/.gitkeep
+!data/db/.gitkeep
+!data/lightrag/.gitkeep
+
+# Test papers (저작권 고려)
+data/test_papers/*.pdf
+
+# Qdrant data
+qdrant_data/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Coverage
+htmlcov/
+.coverage
