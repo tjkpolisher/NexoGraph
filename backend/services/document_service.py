@@ -37,8 +37,8 @@ class DocumentProcessingError(Exception):
 
 def chunk_markdown_text(
     text: str,
-    max_chunk_size: int = 12000,
-    overlap_size: int = 500,
+    max_chunk_size: int = 3000,
+    overlap_size: int = 200,
 ) -> list[str]:
     """Chunk markdown text based on sections with overlap.
 
@@ -53,8 +53,10 @@ def chunk_markdown_text(
 
     Args:
         text: Markdown text to chunk
-        max_chunk_size: Maximum characters per chunk (default: 12000)
-        overlap_size: Characters to overlap between chunks (default: 500)
+        max_chunk_size: Maximum characters per chunk (default: 3000)
+            Note: Upstage Embedding API has a 4000 token limit.
+            With ~2.5-3 chars/token, 3000 chars ≈ 1000-1200 tokens (safe margin)
+        overlap_size: Characters to overlap between chunks (default: 200)
 
     Returns:
         List of text chunks with overlap
@@ -406,19 +408,44 @@ class DocumentService:
 
             chunks = chunk_markdown_text(
                 text=parsed_markdown,
-                max_chunk_size=12000,
-                overlap_size=500,
+                max_chunk_size=3000,  # Safe for 4000 token limit (~1000-1200 tokens)
+                overlap_size=200,
             )
 
             logger.info(
                 f"Document chunked into {len(chunks)} chunks (id: {document_id})"
             )
 
+            # Validate chunk sizes (safety check for token limit)
+            MAX_SAFE_CHUNK_SIZE = 3000  # Characters, ~1000-1200 tokens
+            oversized_chunks = [
+                (i, len(chunk)) for i, chunk in enumerate(chunks)
+                if len(chunk) > MAX_SAFE_CHUNK_SIZE
+            ]
+            if oversized_chunks:
+                logger.warning(
+                    f"Found {len(oversized_chunks)} oversized chunks (id: {document_id}). "
+                    f"Sizes: {oversized_chunks[:5]}..."
+                )
+
             # Step 4: Generate embeddings and store in Qdrant
             logger.info(f"Generating embeddings for chunks (id: {document_id})")
 
             chunk_ids = []
             for chunk_index, chunk_text in enumerate(chunks):
+                # Skip empty chunks
+                if not chunk_text.strip():
+                    logger.warning(f"Skipping empty chunk at index {chunk_index}")
+                    continue
+
+                # Truncate if still too large (emergency fallback)
+                if len(chunk_text) > MAX_SAFE_CHUNK_SIZE:
+                    logger.warning(
+                        f"Truncating oversized chunk {chunk_index} from "
+                        f"{len(chunk_text)} to {MAX_SAFE_CHUNK_SIZE} chars"
+                    )
+                    chunk_text = chunk_text[:MAX_SAFE_CHUNK_SIZE]
+
                 # Generate embedding
                 embedding = await self.upstage_embedding.get_embedding(
                     text=chunk_text,
