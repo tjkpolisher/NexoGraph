@@ -62,6 +62,37 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.warning(f"✗ Qdrant connection failed: {e}")
         logger.warning("  Qdrant services will be unavailable until connection is restored")
 
+    # Warm up LightRAG (eliminates 3-5s delay on first query)
+    logger.info("Warming up LightRAG service...")
+    try:
+        from backend.services.lightrag_service import get_lightrag_service_instance
+        from backend.services.upstage.llm import UpstageLLMService
+        from backend.services.upstage.embedding import UpstageEmbeddingService
+
+        # Create service instances for LightRAG
+        llm_service = UpstageLLMService(
+            api_key=settings.upstage_api_key,
+            base_url=settings.upstage_base_url,
+        )
+        embedding_service = UpstageEmbeddingService(
+            api_key=settings.upstage_api_key,
+            base_url=settings.upstage_base_url,
+        )
+
+        # Get LightRAG service instance
+        lightrag_service = get_lightrag_service_instance(
+            working_dir=settings.lightrag_working_dir,
+            llm_service=llm_service,
+            embedding_service=embedding_service,
+        )
+
+        # Initialize the service (triggers model loading and graph setup)
+        await lightrag_service.initialize()
+        logger.info("✓ LightRAG warm-up complete")
+    except Exception as e:
+        logger.warning(f"✗ LightRAG warm-up failed: {e}")
+        logger.warning("  First query may experience initialization delay")
+
     logger.info("Application startup complete")
     logger.info("=" * 60)
 

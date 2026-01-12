@@ -60,6 +60,17 @@ class LightRAGService:
 
         logger.info(f"LightRAGService initialized (working_dir: {working_dir})")
 
+    async def initialize(self) -> None:
+        """Initialize LightRAG service (public method for explicit warm-up).
+
+        This is a public wrapper around _initialize_rag() that allows
+        explicit initialization during application startup for warm-up purposes.
+
+        Raises:
+            LightRAGServiceError: If LightRAG initialization fails
+        """
+        await self._initialize_rag()
+
     async def _initialize_rag(self) -> None:
         """Initialize LightRAG instance with custom functions.
 

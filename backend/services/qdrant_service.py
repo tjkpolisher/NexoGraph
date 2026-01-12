@@ -258,6 +258,64 @@ class QdrantService:
             logger.error(error_msg)
             raise QdrantServiceError(error_msg) from e
 
+    async def upsert_points_batch(
+        self,
+        points_data: list[dict[str, Any]],
+    ) -> None:
+        """Upsert multiple points in batch (convenience wrapper).
+
+        This is a convenience wrapper around add_vectors() that accepts
+        a list of point data dictionaries and unpacks them for batch insertion.
+
+        Args:
+            points_data: List of dictionaries with keys:
+                - point_id: Unique identifier (str)
+                - vector: Vector embedding (list[float])
+                - payload: Metadata dictionary (dict[str, Any])
+
+        Raises:
+            ValueError: If any point data is missing required keys
+            QdrantServiceError: If vector insertion fails
+
+        Example:
+            >>> await service.upsert_points_batch([
+            ...     {
+            ...         "point_id": "chunk_1",
+            ...         "vector": [0.1, 0.2, ...],
+            ...         "payload": {"document_id": "doc1", "text": "..."}
+            ...     },
+            ...     {
+            ...         "point_id": "chunk_2",
+            ...         "vector": [0.3, 0.4, ...],
+            ...         "payload": {"document_id": "doc1", "text": "..."}
+            ...     }
+            ... ])
+        """
+        if not points_data:
+            logger.warning("upsert_points_batch called with empty list, skipping")
+            return
+
+        # Extract data from points_data
+        ids = []
+        vectors = []
+        payloads = []
+
+        for i, point in enumerate(points_data):
+            # Validate required keys
+            if "point_id" not in point:
+                raise ValueError(f"Point at index {i} missing 'point_id' key")
+            if "vector" not in point:
+                raise ValueError(f"Point at index {i} missing 'vector' key")
+            if "payload" not in point:
+                raise ValueError(f"Point at index {i} missing 'payload' key")
+
+            ids.append(point["point_id"])
+            vectors.append(point["vector"])
+            payloads.append(point["payload"])
+
+        # Use existing add_vectors method
+        await self.add_vectors(ids=ids, vectors=vectors, payloads=payloads)
+
     @retry(
         stop=stop_after_attempt(5),
         wait=wait_exponential(multiplier=1, min=2, max=10),

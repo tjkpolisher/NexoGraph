@@ -27,6 +27,7 @@ streamlit>=1.30.0
 # Utilities
 tqdm>=4.66.0
 tenacity>=8.2.0
+tiktoken>=0.6.0
 
 # Development
 pytest>=7.4.0

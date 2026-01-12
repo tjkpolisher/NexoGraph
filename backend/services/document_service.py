@@ -20,6 +20,7 @@ from backend.services.upstage.document_parser import UpstageDocumentParseService
 from backend.services.upstage.embedding import UpstageEmbeddingService
 from backend.services.qdrant_service import QdrantService
 from backend.services.lightrag_service import LightRAGService
+from backend.utils.token_counter import count_tokens, truncate_to_token_limit
 
 logger = logging.getLogger(__name__)
 
@@ -416,63 +417,95 @@ class DocumentService:
                 f"Document chunked into {len(chunks)} chunks (id: {document_id})"
             )
 
-            # Validate chunk sizes (safety check for token limit)
-            MAX_SAFE_CHUNK_SIZE = 3000  # Characters, ~1000-1200 tokens
-            oversized_chunks = [
-                (i, len(chunk)) for i, chunk in enumerate(chunks)
-                if len(chunk) > MAX_SAFE_CHUNK_SIZE
-            ]
+            # Validate chunk sizes using token counting (accurate token limit enforcement)
+            # Upstage Embedding API has a token limit (typically 8192 tokens)
+            # We use 4000 as a safe limit to ensure reliability
+            MAX_TOKEN_LIMIT = 4000
+            oversized_chunks = []
+
+            for i, chunk in enumerate(chunks):
+                token_count = count_tokens(chunk)
+                if token_count > MAX_TOKEN_LIMIT:
+                    oversized_chunks.append((i, token_count))
+
             if oversized_chunks:
                 logger.warning(
                     f"Found {len(oversized_chunks)} oversized chunks (id: {document_id}). "
-                    f"Sizes: {oversized_chunks[:5]}..."
+                    f"Token counts: {oversized_chunks[:5]}..."
                 )
 
             # Step 4: Generate embeddings and store in Qdrant
             logger.info(f"Generating embeddings for chunks (id: {document_id})")
 
-            chunk_ids = []
+            # Prepare chunks for batch processing
+            valid_chunks = []
+            chunk_metadata = []
+
             for chunk_index, chunk_text in enumerate(chunks):
                 # Skip empty chunks
                 if not chunk_text.strip():
                     logger.warning(f"Skipping empty chunk at index {chunk_index}")
                     continue
 
-                # Truncate if still too large (emergency fallback)
-                if len(chunk_text) > MAX_SAFE_CHUNK_SIZE:
+                # Validate and truncate using token counting
+                token_count = count_tokens(chunk_text)
+                if token_count > MAX_TOKEN_LIMIT:
                     logger.warning(
                         f"Truncating oversized chunk {chunk_index} from "
-                        f"{len(chunk_text)} to {MAX_SAFE_CHUNK_SIZE} chars"
+                        f"{token_count} to {MAX_TOKEN_LIMIT} tokens"
                     )
-                    chunk_text = chunk_text[:MAX_SAFE_CHUNK_SIZE]
+                    chunk_text = truncate_to_token_limit(
+                        chunk_text,
+                        max_tokens=MAX_TOKEN_LIMIT,
+                        suffix="..."
+                    )
 
-                # Generate embedding
-                embedding = await self.upstage_embedding.get_embedding(
-                    text=chunk_text,
-                    model_type="passage",
-                )
+                valid_chunks.append(chunk_text)
+                chunk_metadata.append({
+                    "original_index": chunk_index,
+                    "text": chunk_text,
+                })
 
-                # Create chunk ID (must be a valid UUID for Qdrant)
+            if not valid_chunks:
+                raise ValueError("No valid chunks to process after filtering")
+
+            # Generate embeddings in batch (5-10x faster than sequential)
+            logger.info(f"Generating {len(valid_chunks)} embeddings in batch...")
+            embeddings = await self.upstage_embedding.get_embeddings_batch(
+                texts=valid_chunks,
+                model_type="passage",
+            )
+
+            logger.info(f"Batch embeddings generated: {len(embeddings)} vectors")
+
+            # Store all embeddings in Qdrant in batch
+            chunk_ids = []
+            points_data = []
+
+            for idx, (embedding, metadata) in enumerate(zip(embeddings, chunk_metadata)):
                 chunk_id = str(uuid.uuid4())
                 chunk_ids.append(chunk_id)
 
-                # Store in Qdrant
-                await self.qdrant_service.upsert_point(
-                    point_id=chunk_id,
-                    vector=embedding,
-                    payload={
+                points_data.append({
+                    "point_id": chunk_id,
+                    "vector": embedding,
+                    "payload": {
                         "document_id": document_id,
                         "document_title": title,
-                        "chunk_index": chunk_index,
-                        "text": chunk_text,
+                        "chunk_index": metadata["original_index"],
+                        "text": metadata["text"],
                         "category": category,
                         "tags": tags,
                     },
-                )
+                })
+
+            # Batch upsert to Qdrant
+            logger.info(f"Storing {len(points_data)} points in Qdrant...")
+            await self.qdrant_service.upsert_points_batch(points_data)
 
             logger.info(
                 f"Embeddings generated and stored in Qdrant "
-                f"(id: {document_id}, chunks: {len(chunks)})"
+                f"(id: {document_id}, chunks: {len(valid_chunks)})"
             )
 
             # Step 5: Add full document to LightRAG knowledge graph
