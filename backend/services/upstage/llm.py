@@ -4,6 +4,7 @@ This module provides a service for interacting with Upstage's Solar language mod
 via their OpenAI-compatible API.
 """
 
+import asyncio
 import logging
 from typing import Any, Optional
 
@@ -25,6 +26,12 @@ class UpstageLLMError(Exception):
     pass
 
 
+class UpstageLLMRateLimitError(UpstageLLMError):
+    """Exception raised when rate limit is exceeded."""
+
+    pass
+
+
 class UpstageLLMService:
     """Service for Upstage Solar language model API.
 
@@ -42,6 +49,7 @@ class UpstageLLMService:
         api_key: str,
         base_url: str = "https://api.upstage.ai/v1",
         default_model: str = "solar-pro2",
+        max_concurrent_requests: int = 3,
     ) -> None:
         """Initialize Upstage LLM service.
 
@@ -49,6 +57,7 @@ class UpstageLLMService:
             api_key: Upstage API key (starts with 'up_')
             base_url: API base URL
             default_model: Default model to use (solar-pro or solar-mini)
+            max_concurrent_requests: Maximum number of concurrent API requests (default: 3)
 
         Raises:
             ValueError: If API key is invalid
@@ -59,13 +68,19 @@ class UpstageLLMService:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.default_model = default_model
+        self._semaphore = asyncio.Semaphore(max_concurrent_requests)
 
-        logger.info(f"UpstageLLMService initialized (model: {self.default_model})")
+        logger.info(
+            f"UpstageLLMService initialized "
+            f"(model: {self.default_model}, max_concurrent_requests: {max_concurrent_requests})"
+        )
 
     @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type((httpx.HTTPError, httpx.TimeoutException)),
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=1, min=4, max=60),
+        retry=retry_if_exception_type(
+            (httpx.HTTPError, httpx.TimeoutException, UpstageLLMRateLimitError)
+        ),
         before_sleep=before_sleep_log(logger, logging.WARNING),
     )
     async def chat_completion(
@@ -126,25 +141,47 @@ class UpstageLLMService:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                logger.debug(f"Sending chat completion request (model: {model_name})")
+            async with self._semaphore:
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    logger.debug(f"Sending chat completion request (model: {model_name})")
 
-                response = await client.post(url, json=payload, headers=headers)
-                response.raise_for_status()
+                    response = await client.post(url, json=payload, headers=headers)
 
-                result = response.json()
+                    # Handle rate limit (429)
+                    if response.status_code == 429:
+                        retry_after = response.headers.get("Retry-After")
+                        if retry_after:
+                            wait_time = int(retry_after)
+                            logger.warning(
+                                f"Rate limit exceeded. Retry after {wait_time} seconds"
+                            )
+                            await asyncio.sleep(wait_time)
+                        raise UpstageLLMRateLimitError("Rate limit exceeded (429)")
 
-                # Extract content from response
-                content = result["choices"][0]["message"]["content"]
+                    response.raise_for_status()
 
-                logger.info(
-                    f"Chat completion successful "
-                    f"(tokens: {result.get('usage', {}).get('total_tokens', 'N/A')})"
-                )
+                    result = response.json()
 
-                return content
+                    # Extract content from response
+                    content = result["choices"][0]["message"]["content"]
+
+                    logger.info(
+                        f"Chat completion successful "
+                        f"(tokens: {result.get('usage', {}).get('total_tokens', 'N/A')})"
+                    )
+
+                    return content
 
         except httpx.HTTPStatusError as e:
+            # Handle rate limit separately
+            if e.response.status_code == 429:
+                retry_after = e.response.headers.get("Retry-After")
+                if retry_after:
+                    wait_time = int(retry_after)
+                    logger.warning(f"Rate limit exceeded. Retry after {wait_time} seconds")
+                    await asyncio.sleep(wait_time)
+                raise UpstageLLMRateLimitError("Rate limit exceeded (429)") from e
+
             error_msg = f"HTTP error from Upstage LLM API: {e.response.status_code}"
             try:
                 error_detail = e.response.json()

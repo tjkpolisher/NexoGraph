@@ -4,6 +4,7 @@ This module provides a service for generating embeddings using Upstage's
 Solar embedding models (asymmetric embeddings for passage and query).
 """
 
+import asyncio
 import logging
 from typing import Literal
 
@@ -21,6 +22,12 @@ logger = logging.getLogger(__name__)
 
 class UpstageEmbeddingError(Exception):
     """Base exception for Upstage Embedding service errors."""
+
+    pass
+
+
+class UpstageEmbeddingRateLimitError(UpstageEmbeddingError):
+    """Exception raised when rate limit is exceeded."""
 
     pass
 
@@ -47,12 +54,14 @@ class UpstageEmbeddingService:
         self,
         api_key: str,
         base_url: str = "https://api.upstage.ai/v1",
+        max_concurrent_requests: int = 3,
     ) -> None:
         """Initialize Upstage Embedding service.
 
         Args:
             api_key: Upstage API key (starts with 'up_')
             base_url: API base URL
+            max_concurrent_requests: Maximum number of concurrent API requests (default: 3)
 
         Raises:
             ValueError: If API key is invalid
@@ -62,13 +71,19 @@ class UpstageEmbeddingService:
 
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
+        self._semaphore = asyncio.Semaphore(max_concurrent_requests)
 
-        logger.info("UpstageEmbeddingService initialized")
+        logger.info(
+            f"UpstageEmbeddingService initialized "
+            f"(max_concurrent_requests: {max_concurrent_requests})"
+        )
 
     @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type((httpx.HTTPError, httpx.TimeoutException)),
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=1, min=4, max=60),
+        retry=retry_if_exception_type(
+            (httpx.HTTPError, httpx.TimeoutException, UpstageEmbeddingRateLimitError)
+        ),
         before_sleep=before_sleep_log(logger, logging.WARNING),
     )
     async def get_embedding(
@@ -123,29 +138,51 @@ class UpstageEmbeddingService:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                logger.debug(f"Requesting embedding (model: {model})")
+            async with self._semaphore:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    logger.debug(f"Requesting embedding (model: {model})")
 
-                response = await client.post(url, json=payload, headers=headers)
-                response.raise_for_status()
+                    response = await client.post(url, json=payload, headers=headers)
 
-                result = response.json()
+                    # Handle rate limit (429)
+                    if response.status_code == 429:
+                        retry_after = response.headers.get("Retry-After")
+                        if retry_after:
+                            wait_time = int(retry_after)
+                            logger.warning(
+                                f"Rate limit exceeded. Retry after {wait_time} seconds"
+                            )
+                            await asyncio.sleep(wait_time)
+                        raise UpstageEmbeddingRateLimitError("Rate limit exceeded (429)")
 
-                # Extract embedding from response
-                embedding = result["data"][0]["embedding"]
+                    response.raise_for_status()
 
-                # Validate dimension
-                if len(embedding) != self.VECTOR_SIZE:
-                    raise UpstageEmbeddingError(
-                        f"Unexpected embedding dimension: {len(embedding)} "
-                        f"(expected {self.VECTOR_SIZE})"
-                    )
+                    result = response.json()
 
-                logger.debug(f"Embedding generated (dim: {len(embedding)})")
+                    # Extract embedding from response
+                    embedding = result["data"][0]["embedding"]
 
-                return embedding
+                    # Validate dimension
+                    if len(embedding) != self.VECTOR_SIZE:
+                        raise UpstageEmbeddingError(
+                            f"Unexpected embedding dimension: {len(embedding)} "
+                            f"(expected {self.VECTOR_SIZE})"
+                        )
+
+                    logger.debug(f"Embedding generated (dim: {len(embedding)})")
+
+                    return embedding
 
         except httpx.HTTPStatusError as e:
+            # Handle rate limit separately
+            if e.response.status_code == 429:
+                retry_after = e.response.headers.get("Retry-After")
+                if retry_after:
+                    wait_time = int(retry_after)
+                    logger.warning(f"Rate limit exceeded. Retry after {wait_time} seconds")
+                    await asyncio.sleep(wait_time)
+                raise UpstageEmbeddingRateLimitError("Rate limit exceeded (429)") from e
+
             error_msg = f"HTTP error from Upstage Embedding API: {e.response.status_code}"
             try:
                 error_detail = e.response.json()
@@ -167,9 +204,11 @@ class UpstageEmbeddingService:
             raise UpstageEmbeddingError(error_msg) from e
 
     @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type((httpx.HTTPError, httpx.TimeoutException)),
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=1, min=4, max=60),
+        retry=retry_if_exception_type(
+            (httpx.HTTPError, httpx.TimeoutException, UpstageEmbeddingRateLimitError)
+        ),
         before_sleep=before_sleep_log(logger, logging.WARNING),
     )
     async def get_embeddings_batch(
@@ -223,35 +262,59 @@ class UpstageEmbeddingService:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                logger.debug(f"Requesting batch embeddings (model: {model}, count: {len(valid_texts)})")
-
-                response = await client.post(url, json=payload, headers=headers)
-                response.raise_for_status()
-
-                result = response.json()
-
-                # Extract embeddings from response
-                embeddings = [item["embedding"] for item in result["data"]]
-
-                # Validate count and dimensions
-                if len(embeddings) != len(valid_texts):
-                    raise UpstageEmbeddingError(
-                        f"Expected {len(valid_texts)} embeddings, got {len(embeddings)}"
+            async with self._semaphore:
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    logger.debug(
+                        f"Requesting batch embeddings (model: {model}, count: {len(valid_texts)})"
                     )
 
-                for i, emb in enumerate(embeddings):
-                    if len(emb) != self.VECTOR_SIZE:
+                    response = await client.post(url, json=payload, headers=headers)
+
+                    # Handle rate limit (429)
+                    if response.status_code == 429:
+                        retry_after = response.headers.get("Retry-After")
+                        if retry_after:
+                            wait_time = int(retry_after)
+                            logger.warning(
+                                f"Rate limit exceeded. Retry after {wait_time} seconds"
+                            )
+                            await asyncio.sleep(wait_time)
+                        raise UpstageEmbeddingRateLimitError("Rate limit exceeded (429)")
+
+                    response.raise_for_status()
+
+                    result = response.json()
+
+                    # Extract embeddings from response
+                    embeddings = [item["embedding"] for item in result["data"]]
+
+                    # Validate count and dimensions
+                    if len(embeddings) != len(valid_texts):
                         raise UpstageEmbeddingError(
-                            f"Embedding {i} has unexpected dimension: {len(emb)} "
-                            f"(expected {self.VECTOR_SIZE})"
+                            f"Expected {len(valid_texts)} embeddings, got {len(embeddings)}"
                         )
 
-                logger.info(f"Batch embeddings generated: {len(embeddings)} vectors")
+                    for i, emb in enumerate(embeddings):
+                        if len(emb) != self.VECTOR_SIZE:
+                            raise UpstageEmbeddingError(
+                                f"Embedding {i} has unexpected dimension: {len(emb)} "
+                                f"(expected {self.VECTOR_SIZE})"
+                            )
 
-                return embeddings
+                    logger.info(f"Batch embeddings generated: {len(embeddings)} vectors")
+
+                    return embeddings
 
         except httpx.HTTPStatusError as e:
+            # Handle rate limit separately
+            if e.response.status_code == 429:
+                retry_after = e.response.headers.get("Retry-After")
+                if retry_after:
+                    wait_time = int(retry_after)
+                    logger.warning(f"Rate limit exceeded. Retry after {wait_time} seconds")
+                    await asyncio.sleep(wait_time)
+                raise UpstageEmbeddingRateLimitError("Rate limit exceeded (429)") from e
+
             error_msg = f"HTTP error from Upstage Embedding API: {e.response.status_code}"
             try:
                 error_detail = e.response.json()
