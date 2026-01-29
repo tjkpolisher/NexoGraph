@@ -9,6 +9,7 @@ import logging
 from typing import Literal
 
 import httpx
+from circuitbreaker import CircuitBreakerError
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -16,6 +17,10 @@ from tenacity import (
     retry_if_exception_type,
     before_sleep_log,
 )
+
+from backend.services.circuit_breaker import circuit_manager
+from backend.services.metrics_service import metrics_collector
+from backend.exceptions import CircuitOpenError
 
 logger = logging.getLogger(__name__)
 
@@ -72,20 +77,13 @@ class UpstageEmbeddingService:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self._semaphore = asyncio.Semaphore(max_concurrent_requests)
+        self._breaker = circuit_manager.get_breaker("embedding")
 
         logger.info(
             f"UpstageEmbeddingService initialized "
             f"(max_concurrent_requests: {max_concurrent_requests})"
         )
 
-    @retry(
-        stop=stop_after_attempt(5),
-        wait=wait_exponential(multiplier=1, min=4, max=60),
-        retry=retry_if_exception_type(
-            (httpx.HTTPError, httpx.TimeoutException, UpstageEmbeddingRateLimitError)
-        ),
-        before_sleep=before_sleep_log(logger, logging.WARNING),
-    )
     async def get_embedding(
         self,
         text: str,
@@ -104,6 +102,7 @@ class UpstageEmbeddingService:
 
         Raises:
             UpstageEmbeddingError: If API call fails
+            CircuitOpenError: If circuit breaker is open
             ValueError: If text is empty
 
         Example:
@@ -118,6 +117,39 @@ class UpstageEmbeddingService:
             ...     "search query",
             ...     model_type="query"
             ... )
+        """
+        # Record API call
+        metrics_collector.increment("upstage_embedding_calls")
+
+        try:
+            # Circuit Breaker protection
+            return await self._breaker.call_async(
+                self._get_embedding_with_retry, text, model_type
+            )
+        except CircuitBreakerError:
+            # Circuit is open
+            metrics_collector.increment("upstage_embedding_rate_limits")
+            raise CircuitOpenError(
+                service="embedding",
+                retry_after=self._breaker.recovery_timeout
+            )
+
+    @retry(
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=1, min=4, max=60),
+        retry=retry_if_exception_type(
+            (httpx.HTTPError, httpx.TimeoutException, UpstageEmbeddingRateLimitError)
+        ),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
+    )
+    async def _get_embedding_with_retry(
+        self,
+        text: str,
+        model_type: Literal["passage", "query"] = "passage",
+    ) -> list[float]:
+        """Generate embedding with retry logic (internal method).
+
+        This is the actual implementation wrapped by circuit breaker.
         """
         if not text or not text.strip():
             raise ValueError("Text cannot be empty")
@@ -153,6 +185,7 @@ class UpstageEmbeddingService:
                                 f"Rate limit exceeded. Retry after {wait_time} seconds"
                             )
                             await asyncio.sleep(wait_time)
+                        metrics_collector.increment("upstage_embedding_rate_limits")
                         raise UpstageEmbeddingRateLimitError("Rate limit exceeded (429)")
 
                     response.raise_for_status()
@@ -181,6 +214,7 @@ class UpstageEmbeddingService:
                     wait_time = int(retry_after)
                     logger.warning(f"Rate limit exceeded. Retry after {wait_time} seconds")
                     await asyncio.sleep(wait_time)
+                metrics_collector.increment("upstage_embedding_rate_limits")
                 raise UpstageEmbeddingRateLimitError("Rate limit exceeded (429)") from e
 
             error_msg = f"HTTP error from Upstage Embedding API: {e.response.status_code}"
@@ -203,14 +237,6 @@ class UpstageEmbeddingService:
             logger.error(error_msg)
             raise UpstageEmbeddingError(error_msg) from e
 
-    @retry(
-        stop=stop_after_attempt(5),
-        wait=wait_exponential(multiplier=1, min=4, max=60),
-        retry=retry_if_exception_type(
-            (httpx.HTTPError, httpx.TimeoutException, UpstageEmbeddingRateLimitError)
-        ),
-        before_sleep=before_sleep_log(logger, logging.WARNING),
-    )
     async def get_embeddings_batch(
         self,
         texts: list[str],
@@ -227,6 +253,7 @@ class UpstageEmbeddingService:
 
         Raises:
             UpstageEmbeddingError: If API call fails
+            CircuitOpenError: If circuit breaker is open
             ValueError: If texts list is empty
 
         Example:
@@ -237,6 +264,39 @@ class UpstageEmbeddingService:
             ...     model_type="passage"
             ... )
             >>> len(embeddings)  # 3
+        """
+        # Record API call
+        metrics_collector.increment("upstage_embedding_calls")
+
+        try:
+            # Circuit Breaker protection
+            return await self._breaker.call_async(
+                self._get_embeddings_batch_with_retry, texts, model_type
+            )
+        except CircuitBreakerError:
+            # Circuit is open
+            metrics_collector.increment("upstage_embedding_rate_limits")
+            raise CircuitOpenError(
+                service="embedding",
+                retry_after=self._breaker.recovery_timeout
+            )
+
+    @retry(
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=1, min=4, max=60),
+        retry=retry_if_exception_type(
+            (httpx.HTTPError, httpx.TimeoutException, UpstageEmbeddingRateLimitError)
+        ),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
+    )
+    async def _get_embeddings_batch_with_retry(
+        self,
+        texts: list[str],
+        model_type: Literal["passage", "query"] = "passage",
+    ) -> list[list[float]]:
+        """Generate embeddings for batch with retry logic (internal method).
+
+        This is the actual implementation wrapped by circuit breaker.
         """
         if not texts:
             raise ValueError("Texts list cannot be empty")
@@ -279,6 +339,7 @@ class UpstageEmbeddingService:
                                 f"Rate limit exceeded. Retry after {wait_time} seconds"
                             )
                             await asyncio.sleep(wait_time)
+                        metrics_collector.increment("upstage_embedding_rate_limits")
                         raise UpstageEmbeddingRateLimitError("Rate limit exceeded (429)")
 
                     response.raise_for_status()
@@ -313,6 +374,7 @@ class UpstageEmbeddingService:
                     wait_time = int(retry_after)
                     logger.warning(f"Rate limit exceeded. Retry after {wait_time} seconds")
                     await asyncio.sleep(wait_time)
+                metrics_collector.increment("upstage_embedding_rate_limits")
                 raise UpstageEmbeddingRateLimitError("Rate limit exceeded (429)") from e
 
             error_msg = f"HTTP error from Upstage Embedding API: {e.response.status_code}"

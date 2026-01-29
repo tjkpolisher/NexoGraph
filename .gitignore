@@ -3,6 +3,7 @@
 .env.local
 *.env
 .claude
+.omc/
 
 # Python
 __pycache__/

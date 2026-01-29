@@ -4,10 +4,12 @@ This module provides a service for parsing documents (PDF, images, etc.)
 using Upstage's Document AI API with OCR and layout analysis capabilities.
 """
 
+import asyncio
 import logging
 from typing import Any
 
 import httpx
+from circuitbreaker import CircuitBreakerError
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -16,11 +18,21 @@ from tenacity import (
     before_sleep_log,
 )
 
+from backend.services.circuit_breaker import circuit_manager
+from backend.services.metrics_service import metrics_collector
+from backend.exceptions import CircuitOpenError
+
 logger = logging.getLogger(__name__)
 
 
 class UpstageDocumentParseError(Exception):
     """Base exception for Upstage Document Parse service errors."""
+
+    pass
+
+
+class UpstageDocumentParseRateLimitError(UpstageDocumentParseError):
+    """Exception raised when rate limit is exceeded."""
 
     pass
 
@@ -56,15 +68,10 @@ class UpstageDocumentParseService:
 
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
+        self._breaker = circuit_manager.get_breaker("parser")
 
         logger.info("UpstageDocumentParseService initialized")
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=4, max=20),
-        retry=retry_if_exception_type((httpx.HTTPError, httpx.TimeoutException)),
-        before_sleep=before_sleep_log(logger, logging.WARNING),
-    )
     async def parse_document(
         self,
         file_content: bytes,
@@ -88,6 +95,7 @@ class UpstageDocumentParseService:
 
         Raises:
             UpstageDocumentParseError: If API call fails
+            CircuitOpenError: If circuit breaker is open
             ValueError: If file content is empty
 
         Example:
@@ -97,6 +105,40 @@ class UpstageDocumentParseService:
             >>> result = await service.parse_document(content, "document.pdf")
             >>> markdown = result["content"]["markdown"]
             >>> elements = result["elements"]
+        """
+        # Record API call
+        metrics_collector.increment("upstage_parser_calls")
+
+        try:
+            # Circuit Breaker protection
+            return await self._breaker.call_async(
+                self._parse_document_with_retry, file_content, filename, output_formats
+            )
+        except CircuitBreakerError:
+            # Circuit is open
+            metrics_collector.increment("upstage_parser_rate_limits")
+            raise CircuitOpenError(
+                service="parser",
+                retry_after=self._breaker.recovery_timeout
+            )
+
+    @retry(
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=1, min=4, max=60),
+        retry=retry_if_exception_type(
+            (httpx.HTTPError, httpx.TimeoutException, UpstageDocumentParseRateLimitError)
+        ),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
+    )
+    async def _parse_document_with_retry(
+        self,
+        file_content: bytes,
+        filename: str,
+        output_formats: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Parse a document with retry logic (internal method).
+
+        This is the actual implementation wrapped by circuit breaker.
         """
         if not file_content:
             raise ValueError("File content cannot be empty")
@@ -130,6 +172,19 @@ class UpstageDocumentParseService:
                     data=data,
                     headers=headers,
                 )
+
+                # Handle rate limit (429)
+                if response.status_code == 429:
+                    retry_after = response.headers.get("Retry-After")
+                    if retry_after:
+                        wait_time = int(retry_after)
+                        logger.warning(
+                            f"Rate limit exceeded. Retry after {wait_time} seconds"
+                        )
+                        await asyncio.sleep(wait_time)
+                    metrics_collector.increment("upstage_parser_rate_limits")
+                    raise UpstageDocumentParseRateLimitError("Rate limit exceeded (429)")
+
                 response.raise_for_status()
 
                 result = response.json()
@@ -148,6 +203,16 @@ class UpstageDocumentParseService:
                 return result
 
         except httpx.HTTPStatusError as e:
+            # Handle rate limit separately
+            if e.response.status_code == 429:
+                retry_after = e.response.headers.get("Retry-After")
+                if retry_after:
+                    wait_time = int(retry_after)
+                    logger.warning(f"Rate limit exceeded. Retry after {wait_time} seconds")
+                    await asyncio.sleep(wait_time)
+                metrics_collector.increment("upstage_parser_rate_limits")
+                raise UpstageDocumentParseRateLimitError("Rate limit exceeded (429)") from e
+
             error_msg = f"HTTP error from Upstage Document Parse API: {e.response.status_code}"
             try:
                 error_detail = e.response.json()

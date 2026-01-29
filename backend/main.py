@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api.routes import api_router
 from backend.config import get_settings
+from backend.middleware import MetricsMiddleware
 
 # Configure logging
 logging.basicConfig(
@@ -113,6 +114,10 @@ app = FastAPI(
     lifespan=lifespan,
     debug=settings.app_debug,
 )
+
+# Add metrics middleware (must be added before CORS middleware)
+# Order matters: metrics middleware should be outer layer to capture all requests
+app.add_middleware(MetricsMiddleware)
 
 # Configure CORS middleware
 app.add_middleware(

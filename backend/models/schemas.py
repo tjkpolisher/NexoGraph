@@ -527,3 +527,212 @@ class ErrorResponse(BaseModel):
                 }
             ]
         }
+
+
+# ============================================================================
+# Monitoring & Metrics Schemas
+# ============================================================================
+
+class EndpointStats(BaseModel):
+    """Endpoint statistics model.
+
+    Attributes:
+        count: Total number of requests to this endpoint
+        avg_duration_ms: Average request duration in milliseconds
+        error_count: Number of failed requests
+        error_rate: Error rate (0.0-1.0)
+    """
+
+    count: int = Field(
+        ge=0,
+        description="Total number of requests to this endpoint",
+        examples=[100]
+    )
+    avg_duration_ms: float = Field(
+        ge=0.0,
+        description="Average request duration in milliseconds",
+        examples=[245.5]
+    )
+    error_count: int = Field(
+        ge=0,
+        description="Number of failed requests (status >= 400)",
+        examples=[5]
+    )
+    error_rate: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="Error rate as a fraction (0.0-1.0)",
+        examples=[0.05]
+    )
+
+    class Config:
+        """Pydantic configuration."""
+        json_schema_extra = {
+            "example": {
+                "count": 100,
+                "avg_duration_ms": 245.5,
+                "error_count": 5,
+                "error_rate": 0.05
+            }
+        }
+
+
+class UpstageServiceStats(BaseModel):
+    """Upstage service statistics model.
+
+    Attributes:
+        calls: Total number of API calls
+        rate_limit_hits: Number of rate limit errors (429)
+        retry_attempts: Total retry attempts
+        circuit_state: Circuit breaker state (closed/open/half_open)
+    """
+
+    calls: int = Field(
+        ge=0,
+        description="Total number of API calls to this service",
+        examples=[250]
+    )
+    rate_limit_hits: int = Field(
+        ge=0,
+        description="Number of rate limit errors (HTTP 429)",
+        examples=[3]
+    )
+    retry_attempts: int = Field(
+        ge=0,
+        description="Total retry attempts across all calls",
+        examples=[7]
+    )
+    circuit_state: str = Field(
+        pattern="^(closed|open|half_open)$",
+        description="Circuit breaker state",
+        examples=["closed"]
+    )
+
+    class Config:
+        """Pydantic configuration."""
+        json_schema_extra = {
+            "example": {
+                "calls": 250,
+                "rate_limit_hits": 3,
+                "retry_attempts": 7,
+                "circuit_state": "closed"
+            }
+        }
+
+
+class MetricsResponse(BaseModel):
+    """API metrics response model.
+
+    Provides comprehensive server metrics including uptime, request statistics,
+    endpoint performance, and Upstage service health.
+
+    Attributes:
+        uptime_seconds: Server uptime in seconds
+        total_requests: Total number of requests processed
+        total_errors: Total number of failed requests
+        error_rate: Overall error rate (0.0-1.0)
+        requests_per_second: Average requests per second
+        endpoints: Per-endpoint statistics
+        upstage_services: Upstage service statistics (embedding, llm, parser)
+        timestamp: Response timestamp in ISO 8601 format
+    """
+
+    uptime_seconds: float = Field(
+        ge=0.0,
+        description="Server uptime in seconds",
+        examples=[3600.5]
+    )
+    total_requests: int = Field(
+        ge=0,
+        description="Total number of requests processed",
+        examples=[1500]
+    )
+    total_errors: int = Field(
+        ge=0,
+        description="Total number of failed requests",
+        examples=[45]
+    )
+    error_rate: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="Overall error rate as a fraction (0.0-1.0)",
+        examples=[0.03]
+    )
+    requests_per_second: float = Field(
+        ge=0.0,
+        description="Average requests per second",
+        examples=[0.417]
+    )
+    endpoints: dict[str, EndpointStats] = Field(
+        description="Statistics for each API endpoint",
+        examples=[{
+            "GET /api/v1/health": {
+                "count": 100,
+                "avg_duration_ms": 5.2,
+                "error_count": 0,
+                "error_rate": 0.0
+            }
+        }]
+    )
+    upstage_services: dict[str, UpstageServiceStats] = Field(
+        description="Statistics for each Upstage service",
+        examples=[{
+            "embedding": {
+                "calls": 250,
+                "rate_limit_hits": 3,
+                "retry_attempts": 7,
+                "circuit_state": "closed"
+            }
+        }]
+    )
+    timestamp: datetime = Field(
+        description="Response timestamp in ISO 8601 format",
+        examples=["2025-01-29T10:30:00.123456"]
+    )
+
+    class Config:
+        """Pydantic configuration."""
+        json_schema_extra = {
+            "example": {
+                "uptime_seconds": 3600.5,
+                "total_requests": 1500,
+                "total_errors": 45,
+                "error_rate": 0.03,
+                "requests_per_second": 0.417,
+                "endpoints": {
+                    "GET /api/v1/health": {
+                        "count": 100,
+                        "avg_duration_ms": 5.2,
+                        "error_count": 0,
+                        "error_rate": 0.0
+                    },
+                    "POST /api/v1/chat": {
+                        "count": 250,
+                        "avg_duration_ms": 2400.8,
+                        "error_count": 15,
+                        "error_rate": 0.06
+                    }
+                },
+                "upstage_services": {
+                    "embedding": {
+                        "calls": 250,
+                        "rate_limit_hits": 3,
+                        "retry_attempts": 7,
+                        "circuit_state": "closed"
+                    },
+                    "llm": {
+                        "calls": 150,
+                        "rate_limit_hits": 1,
+                        "retry_attempts": 2,
+                        "circuit_state": "closed"
+                    },
+                    "parser": {
+                        "calls": 50,
+                        "rate_limit_hits": 0,
+                        "retry_attempts": 0,
+                        "circuit_state": "closed"
+                    }
+                },
+                "timestamp": "2025-01-29T10:30:00.123456"
+            }
+        }
