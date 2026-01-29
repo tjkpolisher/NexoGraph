@@ -4,10 +4,12 @@ This module provides a service for interacting with Upstage's Solar language mod
 via their OpenAI-compatible API.
 """
 
+import asyncio
 import logging
 from typing import Any, Optional
 
 import httpx
+from circuitbreaker import CircuitBreakerError
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -16,11 +18,21 @@ from tenacity import (
     before_sleep_log,
 )
 
+from backend.services.circuit_breaker import circuit_manager
+from backend.services.metrics_service import metrics_collector
+from backend.exceptions import CircuitOpenError
+
 logger = logging.getLogger(__name__)
 
 
 class UpstageLLMError(Exception):
     """Base exception for Upstage LLM service errors."""
+
+    pass
+
+
+class UpstageLLMRateLimitError(UpstageLLMError):
+    """Exception raised when rate limit is exceeded."""
 
     pass
 
@@ -42,6 +54,7 @@ class UpstageLLMService:
         api_key: str,
         base_url: str = "https://api.upstage.ai/v1",
         default_model: str = "solar-pro2",
+        max_concurrent_requests: int = 3,
     ) -> None:
         """Initialize Upstage LLM service.
 
@@ -49,6 +62,7 @@ class UpstageLLMService:
             api_key: Upstage API key (starts with 'up_')
             base_url: API base URL
             default_model: Default model to use (solar-pro or solar-mini)
+            max_concurrent_requests: Maximum number of concurrent API requests (default: 3)
 
         Raises:
             ValueError: If API key is invalid
@@ -59,15 +73,14 @@ class UpstageLLMService:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.default_model = default_model
+        self._semaphore = asyncio.Semaphore(max_concurrent_requests)
+        self._breaker = circuit_manager.get_breaker("llm")
 
-        logger.info(f"UpstageLLMService initialized (model: {self.default_model})")
+        logger.info(
+            f"UpstageLLMService initialized "
+            f"(model: {self.default_model}, max_concurrent_requests: {max_concurrent_requests})"
+        )
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type((httpx.HTTPError, httpx.TimeoutException)),
-        before_sleep=before_sleep_log(logger, logging.WARNING),
-    )
     async def chat_completion(
         self,
         messages: list[dict[str, str]],
@@ -90,6 +103,7 @@ class UpstageLLMService:
 
         Raises:
             UpstageLLMError: If API call fails
+            CircuitOpenError: If circuit breaker is open
             ValueError: If messages format is invalid
 
         Example:
@@ -99,6 +113,42 @@ class UpstageLLMService:
             ...     {"role": "user", "content": "What is GraphRAG?"}
             ... ]
             >>> response = await service.chat_completion(messages)
+        """
+        # Record API call
+        metrics_collector.increment("upstage_llm_calls")
+
+        try:
+            # Circuit Breaker protection
+            return await self._breaker.call_async(
+                self._chat_completion_with_retry, messages, temperature, max_tokens, model, stream
+            )
+        except CircuitBreakerError:
+            # Circuit is open
+            metrics_collector.increment("upstage_llm_rate_limits")
+            raise CircuitOpenError(
+                service="llm",
+                retry_after=self._breaker.recovery_timeout
+            )
+
+    @retry(
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=1, min=4, max=60),
+        retry=retry_if_exception_type(
+            (httpx.HTTPError, httpx.TimeoutException, UpstageLLMRateLimitError)
+        ),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
+    )
+    async def _chat_completion_with_retry(
+        self,
+        messages: list[dict[str, str]],
+        temperature: float = 0.1,
+        max_tokens: int = 2048,
+        model: Optional[str] = None,
+        stream: bool = False,
+    ) -> str:
+        """Generate a chat completion with retry logic (internal method).
+
+        This is the actual implementation wrapped by circuit breaker.
         """
         # Validate messages
         if not messages or not isinstance(messages, list):
@@ -126,25 +176,49 @@ class UpstageLLMService:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                logger.debug(f"Sending chat completion request (model: {model_name})")
+            async with self._semaphore:
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    logger.debug(f"Sending chat completion request (model: {model_name})")
 
-                response = await client.post(url, json=payload, headers=headers)
-                response.raise_for_status()
+                    response = await client.post(url, json=payload, headers=headers)
 
-                result = response.json()
+                    # Handle rate limit (429)
+                    if response.status_code == 429:
+                        retry_after = response.headers.get("Retry-After")
+                        if retry_after:
+                            wait_time = int(retry_after)
+                            logger.warning(
+                                f"Rate limit exceeded. Retry after {wait_time} seconds"
+                            )
+                            await asyncio.sleep(wait_time)
+                        metrics_collector.increment("upstage_llm_rate_limits")
+                        raise UpstageLLMRateLimitError("Rate limit exceeded (429)")
 
-                # Extract content from response
-                content = result["choices"][0]["message"]["content"]
+                    response.raise_for_status()
 
-                logger.info(
-                    f"Chat completion successful "
-                    f"(tokens: {result.get('usage', {}).get('total_tokens', 'N/A')})"
-                )
+                    result = response.json()
 
-                return content
+                    # Extract content from response
+                    content = result["choices"][0]["message"]["content"]
+
+                    logger.info(
+                        f"Chat completion successful "
+                        f"(tokens: {result.get('usage', {}).get('total_tokens', 'N/A')})"
+                    )
+
+                    return content
 
         except httpx.HTTPStatusError as e:
+            # Handle rate limit separately
+            if e.response.status_code == 429:
+                retry_after = e.response.headers.get("Retry-After")
+                if retry_after:
+                    wait_time = int(retry_after)
+                    logger.warning(f"Rate limit exceeded. Retry after {wait_time} seconds")
+                    await asyncio.sleep(wait_time)
+                metrics_collector.increment("upstage_llm_rate_limits")
+                raise UpstageLLMRateLimitError("Rate limit exceeded (429)") from e
+
             error_msg = f"HTTP error from Upstage LLM API: {e.response.status_code}"
             try:
                 error_detail = e.response.json()
