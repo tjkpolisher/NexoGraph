@@ -14,11 +14,57 @@ GET /health
 Response 200:
 {
   "status": "healthy",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "services": {
     "qdrant": "connected",
     "upstage": "connected",
     "lightrag": "initialized"
+  }
+}
+```
+
+### 1-1. Metrics (Phase 1 구현됨)
+```
+GET /metrics
+
+Response 200:
+{
+  "total_requests": 150,
+  "total_errors": 3,
+  "error_rate": 0.02,
+  "endpoints": {
+    "/api/v1/chat": {
+      "requests": 50,
+      "errors": 1,
+      "avg_response_time_ms": 1200
+    }
+  },
+  "services": {
+    "upstage_embedding": {
+      "requests": 100,
+      "rate_limits": 2
+    }
+  }
+}
+```
+
+### 1-2. Circuit Breaker Status (Phase 1 구현됨)
+```
+GET /circuit-breaker/status
+
+Response 200:
+{
+  "services": {
+    "upstage_embedding": {
+      "state": "closed",
+      "failure_count": 0,
+      "last_failure": null
+    },
+    "upstage_llm": {
+      "state": "half_open",
+      "failure_count": 3,
+      "last_failure": "2026-02-16T10:30:00Z"
+    }
   }
 }
 ```
@@ -112,7 +158,7 @@ POST /chat
 Request:
 {
   "query": "Transformer의 Attention 메커니즘을 설명해줘",
-  "mode": "hybrid",  // "local" | "global" | "hybrid"
+  "mode": "hybrid",  // "local" | "global" | "hybrid" | "naive" | "mix"
   "top_k": 5,        // 검색할 청크 수 (optional, default: 5)
   "include_sources": true  // 출처 포함 여부 (optional, default: true)
 }
@@ -131,8 +177,15 @@ Response 200:
   "mode_used": "hybrid",
   "processing_time_ms": 1200
 }
+
+Mode 설명:
+- hybrid: 벡터 검색 + 그래프 검색 (권장)
+- local: 엔티티 중심 검색
+- global: 전역 지식 검색
+- naive: 단순 벡터 검색만
+- mix: 모든 모드 조합
 ```
 
 ---
 
-*Last Updated: 2026-01-15*
+*Last Updated: 2026-02-16*

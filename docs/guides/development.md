@@ -151,4 +151,4 @@ conda env create -f environment.yml    # 환경 재현 (다른 PC)
 
 ---
 
-*Last Updated: 2026-01-15*
+*Last Updated: 2026-02-16*
