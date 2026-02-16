@@ -9,16 +9,25 @@ GraphRAG 기반 학제간 지식 베이스 시스템으로, AI 분야 논문과 
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.30+-red.svg)](https://streamlit.io/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-## 🎯 Current Phase: Phase 1 MVP
+## 🎯 Current Phase: Phase 2 (Enhanced Q&A)
 
-### Features
+### Phase 1 완료된 기능
 
 - ✅ **Document Upload**: PDF와 Markdown 파일 업로드 및 파싱
 - ✅ **Vector Search**: Qdrant를 이용한 고속 벡터 검색
 - ✅ **Knowledge Graph**: LightRAG 기반 지식 그래프 구축
 - ✅ **Q&A Chatbot**: Upstage Solar LLM 기반 질문답변
-- ✅ **Source Citation**: 답변 출처 표시 및 추적
+- ✅ **Source Citation**: 답변 출처 표시 및 추적 (relevance score 포함)
 - ✅ **Web UI**: Streamlit 기반 사용자 친화적 인터페이스
+- ✅ **Resilience**: Circuit Breaker, 재시도 로직, Rate limit 보호
+- ✅ **Performance**: 배치 임베딩 처리, Token-aware 청킹
+
+### Phase 2 진행 예정
+
+- 🔄 **Auto Collection**: arXiv API를 통한 자동 문서 수집
+- 🔄 **Authentication**: 기본 사용자 인증
+- 🔄 **Chat History**: 대화 히스토리 영구 저장
+- 🔄 **Visualization**: 기본 그래프 시각화
 
 ## 🏗️ Architecture
 
@@ -175,21 +184,24 @@ nexograph/
 
 ## 🔮 Roadmap
 
-### Phase 1 (Current) ✅
-- Basic document upload and Q&A
-- Vector + Graph hybrid search
-- Simple web interface
+### Phase 1 (Completed) ✅
+- ✅ Basic document upload and Q&A
+- ✅ Vector + Graph hybrid search
+- ✅ Simple web interface
+- ✅ Circuit Breaker & Retry logic
+- ✅ Batch embedding processing
 
-### Phase 2 (Planned)
-- Auto document collection (arXiv API)
-- User authentication
-- Graph visualization
-- Persistent chat history
+### Phase 2 (Current) 🔄
+- 🔄 Auto document collection (arXiv API)
+- 🔄 User authentication
+- 🔄 Graph visualization
+- 🔄 Persistent chat history
+- 🔄 Entity extraction display
 
 ### Phase 3-4 (Future)
 - Multi-Agent hypothesis generation
 - Cross-domain knowledge discovery
-- Advanced graph analytics
+- Advanced graph analytics (Neo4j)
 - Multi-domain expansion
 
 ## 🐛 Troubleshooting
@@ -216,5 +228,5 @@ For questions or issues, please check the documentation or create an issue.
 
 ---
 
-**Version**: 0.1.0 (Phase 1 MVP)
-**Last Updated**: 2026-01-01
+**Version**: 0.2.0 (Phase 2)
+**Last Updated**: 2026-02-16
