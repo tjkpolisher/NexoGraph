@@ -58,7 +58,7 @@ Nexograph는 GraphRAG 기반 학제간(Interdisciplinary) 지식 베이스 시�
 | 구성 요소 | 기술 | 버전 | 비고 |
 |----------|------|------|------|
 | **Python Environment** | Anaconda | - | conda 환경: `nexograph` |
-| **Python** | Python | 3.12 | conda로 관리 |
+| **Python** | Python | 3.10 | conda로 관리 |
 | **Backend Framework** | FastAPI | 0.109+ | 비동기 API 서버 |
 | **GraphRAG Engine** | LightRAG | latest | 인메모리 모드 (NetworkX) |
 | **Vector Database** | Qdrant | latest | Docker 로컬 실행 |
@@ -72,8 +72,9 @@ Nexograph는 GraphRAG 기반 학제간(Interdisciplinary) 지식 베이스 시�
 
 ### Phase 2 추가 예정
 - arXiv API (자동 문서 수집)
-- 기본 인증 시스템 (JWT 또는 세션 기반)
-- 그래프 시각화 라이브러리 (Pyvis 또는 D3.js)
+- JWT Bearer 인증 (python-jose + passlib)
+- APScheduler (자동 수집 스케줄링)
+- Pyvis (그래프 시각화)
 
 ### Phase 3-4 추가 예정
 - Neo4j (그래프 데이터베이스)
@@ -92,7 +93,6 @@ nexograph/
 ├── docker-compose.yml            # Qdrant 컨테이너
 ├── environment.yml               # Conda 환경 정의
 ├── requirements.txt
-├── pyproject.toml
 │
 ├── backend/
 │   ├── __init__.py
@@ -308,11 +308,10 @@ pytest --cov=backend
 - [Streamlit Documentation](https://docs.streamlit.io/)
 
 ### 프로젝트 문서
-- `docs/PRD.md` - 전체 PRD (상세 기술 스택, 로드맵)
 - `docs/guides/` - 개발 가이드 모음
 - `docs/reference/` - 참고 자료 모음
 
 ---
 
-*Last Updated: 2026-02-16*
+*Last Updated: 2026-02-18*
 *Version: 0.2.0 (Phase 2 시작)*

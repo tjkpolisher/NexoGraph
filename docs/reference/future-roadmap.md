@@ -12,7 +12,12 @@ Phase 1의 수동 업로드 기반 Q&A 시스템을 자동화 및 개인화된 �
 
 **기술 스택**:
 - arXiv API (OAI-PMH 또는 RSS)
-- APScheduler 또는 Celery (스케줄링)
+- APScheduler (in-process 스케줄링)
+
+**수집 정책**:
+- Rate limit: 1 req/3 sec, 단일 커넥션 (arXiv ToS 준수)
+- PDF 미저장: 메타데이터 + 파싱 텍스트만 인덱싱, 원문은 arXiv 링크 제공
+- 중복 방지: arXiv ID 기반 중복 체크 (idempotent 수집)
 
 **구현 범위**:
 ```
@@ -38,7 +43,7 @@ backend/api/routes/
 -- conversations 테이블
 CREATE TABLE conversations (
     id TEXT PRIMARY KEY,
-    user_id TEXT,  -- Phase 2.3 인증 후 활용
+    user_id TEXT NOT NULL,  -- Phase 2: JWT 인증 필수 (사용자별 격리)
     title TEXT,
     created_at DATETIME,
     updated_at DATETIME
@@ -58,28 +63,35 @@ CREATE TABLE messages (
 #### 3. 기본 사용자 인증
 **목적**: 개인화된 경험 제공
 
-**옵션 비교**:
-| 방식 | 장점 | 단점 | 추천 |
-|------|------|------|------|
-| JWT | 확장성, Stateless | 토큰 관리 복잡 | 확장 계획 시 |
-| Session | 간단, 취소 용이 | 서버 상태 유지 | MVP 추천 ✅ |
+**확정 방식**: JWT Bearer 토큰
+- 라이브러리: python-jose (JWT 생성/검증) + passlib (비밀번호 해싱)
+- 선택 근거: Streamlit→FastAPI 서버사이드 호출 구조에서 쿠키/CSRF 복잡도 회피
+- Access Token + Refresh Token 패턴
 
 **구현 범위**:
-- 이메일/비밀번호 로그인
-- 세션 기반 인증 (Redis 또는 메모리)
+- 이메일/비밀번호 회원가입/로그인
+- JWT Bearer 토큰 인증 (FastAPI Depends)
 - 프로필 관리 (이름, 관심 분야)
+
+**데이터 소유권 모델** (Phase 2 MVP):
+| 데이터 | 소유권 | 설명 |
+|--------|--------|------|
+| 문서 (documents) | 전체 공유 | 업로드한 문서는 모든 사용자가 접근 가능 |
+| LightRAG/Qdrant 인덱스 | 전체 공유 | 사용자별 분리는 Phase 3+ |
+| 대화 (conversations) | 사용자별 격리 | `user_id` 기반 필터링, row-level authorization |
+| 메시지 (messages) | 대화에 종속 | conversation 소유자만 접근 |
+
+> **의도된 제약**: LightRAG는 selective deletion을 지원하지 않으므로, Phase 2에서는 문서 삭제 시 LightRAG 인덱스에서 해당 데이터가 남아있을 수 있습니다. 이는 공유 지식베이스 모델에서는 허용 가능한 제약이며, Phase 3 Neo4j 마이그레이션에서 해결합니다.
 
 #### 4. 기본 그래프 시각화
 **목적**: 지식 그래프 탐색 인터페이스 제공
 
-**라이브러리 선택**:
-| 라이브러리 | 장점 | 단점 |
-|-----------|------|------|
-| Pyvis | Python 네이티브, Streamlit 호환 | 대규모 그래프 성능 |
-| D3.js | 인터랙티브, 커스터마이징 | JavaScript 필요 |
-| vis.js | 사용 편리, 좋은 성능 | 커스터마이징 제한 |
+**확정 라이브러리**: Pyvis (Streamlit 호환성, Python 네이티브)
 
-**추천**: Pyvis (Streamlit 호환성)
+**렌더링 제약**:
+- 노드 상한: 100개, 엣지 상한: 200개
+- 쿼리/문서 기준 subgraph만 렌더링 (전체 그래프 렌더링 금지)
+- 상한 초과 시 relevance 기준 상위 노드만 표시
 
 #### 5. 엔티티 추출 표시
 **목적**: 문서에서 추출된 엔티티 시각화
@@ -190,4 +202,4 @@ Phase 4에서는 다음 도메인으로 확장 예정:
 
 ---
 
-*Last Updated: 2026-02-16*
+*Last Updated: 2026-02-18*

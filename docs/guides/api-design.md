@@ -17,7 +17,7 @@ Response 200:
   "version": "0.2.0",
   "services": {
     "qdrant": "connected",
-    "upstage": "connected",
+    "upstage": "configured",
     "lightrag": "initialized"
   }
 }
@@ -188,4 +188,339 @@ Mode 설명:
 
 ---
 
-*Last Updated: 2026-02-16*
+## Phase 2 엔드포인트
+
+> Phase 2 엔드포인트는 별도 명시가 없는 한 인증이 필요합니다.
+> 인증 헤더: `Authorization: Bearer <access_token>`
+>
+> 예외 (인증 불필요):
+> - `POST /auth/register`
+> - `POST /auth/login`
+
+### 7. 회원가입
+```
+POST /auth/register
+// 인증 불필요
+
+Request:
+{
+  "email": "user@example.com",
+  "password": "securepassword",
+  "name": "홍길동"
+}
+
+Response 201:
+{
+  "id": "uuid",
+  "email": "user@example.com",
+  "name": "홍길동",
+  "created_at": "2026-02-18T10:00:00Z"
+}
+
+Response 409 (이메일 중복):
+{
+  "detail": "Email already registered"
+}
+
+Response 422 (유효성 실패):
+{
+  "detail": [{"loc": ["body", "email"], "msg": "invalid email format"}]
+}
+```
+
+### 8. 로그인
+```
+POST /auth/login
+// 인증 불필요
+
+Request:
+{
+  "email": "user@example.com",
+  "password": "securepassword"
+}
+
+Response 200:
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIs...",
+  "refresh_token": "eyJhbGciOiJIUzI1NiIs...",
+  "token_type": "bearer",
+  "expires_in": 1800
+}
+
+Response 401 (인증 실패):
+{
+  "detail": "Invalid email or password"
+}
+```
+
+### 9. 현재 사용자 정보
+```
+GET /auth/me
+Authorization: Bearer <access_token>
+
+Response 200:
+{
+  "id": "uuid",
+  "email": "user@example.com",
+  "name": "홍길동",
+  "interests": ["NLP", "Computer Vision"],
+  "created_at": "2026-02-18T10:00:00Z"
+}
+
+Response 401:
+{
+  "detail": "Not authenticated"
+}
+```
+
+### 10. 대화 목록 조회
+```
+GET /conversations
+Authorization: Bearer <access_token>
+Query params:
+- page: int (default: 1)
+- limit: int (default: 20, max: 100)
+
+Response 200:
+{
+  "conversations": [
+    {
+      "id": "uuid",
+      "title": "Transformer 아키텍처 질문",
+      "message_count": 5,
+      "created_at": "2026-02-18T10:00:00Z",
+      "updated_at": "2026-02-18T11:30:00Z"
+    }
+  ],
+  "total": 15,
+  "page": 1,
+  "limit": 20
+}
+```
+> 사용자별 격리: 현재 인증된 사용자의 대화만 반환
+
+### 11. 대화 메시지 조회
+```
+GET /conversations/{conversation_id}/messages
+Authorization: Bearer <access_token>
+Query params:
+- page: int (default: 1)
+- limit: int (default: 50, max: 200)
+
+Response 200:
+{
+  "messages": [
+    {
+      "id": "uuid",
+      "role": "user",
+      "content": "Transformer의 Attention 메커니즘을 설명해줘",
+      "sources": null,
+      "created_at": "2026-02-18T10:00:00Z"
+    },
+    {
+      "id": "uuid",
+      "role": "assistant",
+      "content": "Transformer의 Attention 메커니즘은...",
+      "sources": [
+        {
+          "document_id": "uuid",
+          "document_title": "Attention Is All You Need",
+          "relevance_score": 0.95
+        }
+      ],
+      "created_at": "2026-02-18T10:00:05Z"
+    }
+  ],
+  "total": 10,
+  "page": 1,
+  "limit": 50
+}
+
+Response 404 (대화 없음 또는 권한 없음):
+{
+  "detail": "Conversation not found"
+}
+```
+
+### 12. 대화 삭제
+```
+DELETE /conversations/{conversation_id}
+Authorization: Bearer <access_token>
+
+Response 204: No Content
+
+Response 404:
+{
+  "detail": "Conversation not found"
+}
+```
+
+### 13. 채팅 (Phase 2 확장)
+```
+POST /chat
+Authorization: Bearer <access_token>
+
+Request:
+{
+  "query": "Transformer의 Attention 메커니즘을 설명해줘",
+  "mode": "hybrid",
+  "top_k": 5,
+  "include_sources": true,
+  "conversation_id": "uuid"  // optional, 기존 대화 이어하기
+}
+
+Response 200:
+{
+  "answer": "Transformer의 Attention 메커니즘은...",
+  "sources": [...],
+  "mode_used": "hybrid",
+  "processing_time_ms": 1200,
+  "conversation_id": "uuid",  // 신규 생성 또는 기존 대화 ID
+  "message_id": "uuid"
+}
+```
+> conversation_id 미제공 시 새 대화가 자동 생성됩니다.
+
+### 14. 수집 설정
+```
+POST /collection/config
+Authorization: Bearer <access_token>
+
+Request:
+{
+  "categories": ["cs.AI", "cs.CL", "cs.LG"],
+  "keywords": ["transformer", "large language model"],
+  "schedule_interval_hours": 24,
+  "max_papers_per_run": 50
+}
+
+Response 200:
+{
+  "config_id": "uuid",
+  "categories": ["cs.AI", "cs.CL", "cs.LG"],
+  "keywords": ["transformer", "large language model"],
+  "schedule_interval_hours": 24,
+  "max_papers_per_run": 50,
+  "next_run_at": "2026-02-19T10:00:00Z"
+}
+```
+
+### 15. 수집 현황 조회
+```
+GET /collection/status
+Authorization: Bearer <access_token>
+
+Response 200:
+{
+  "is_running": false,
+  "last_run_at": "2026-02-18T10:00:00Z",
+  "last_run_result": {
+    "papers_found": 30,
+    "papers_new": 12,
+    "papers_duplicate": 18,
+    "errors": 0
+  },
+  "total_collected": 150,
+  "next_run_at": "2026-02-19T10:00:00Z"
+}
+```
+
+### 16. 수동 수집 트리거
+```
+POST /collection/trigger
+Authorization: Bearer <access_token>
+
+Request:
+{
+  "categories": ["cs.AI"],       // optional, 설정 기본값 사용
+  "keywords": ["attention"],     // optional
+  "max_papers": 10               // optional
+}
+
+Response 202:
+{
+  "job_id": "uuid",
+  "status": "started",
+  "message": "Collection job started"
+}
+```
+
+### 17. 엔티티 목록 조회
+```
+GET /graph/entities
+Authorization: Bearer <access_token>
+Query params:
+- type: string (optional, 예: "MODEL", "TECHNIQUE", "DATASET")
+- search: string (optional, 이름 검색)
+- page: int (default: 1)
+- limit: int (default: 50, max: 100)
+
+Response 200:
+{
+  "entities": [
+    {
+      "name": "GPT-4",
+      "type": "MODEL",
+      "mention_count": 15,
+      "source_documents": ["uuid1", "uuid2"]
+    }
+  ],
+  "total": 200,
+  "page": 1,
+  "limit": 50
+}
+```
+
+### 18. 관계 목록 조회
+```
+GET /graph/relations
+Authorization: Bearer <access_token>
+Query params:
+- entity: string (optional, 특정 엔티티 기준 관계)
+- type: string (optional, 관계 타입 필터)
+- page: int (default: 1)
+- limit: int (default: 50, max: 200)
+
+Response 200:
+{
+  "relations": [
+    {
+      "source": "GPT-4",
+      "target": "Transformer",
+      "type": "USES_TECHNIQUE",
+      "weight": 0.85
+    }
+  ],
+  "total": 500,
+  "page": 1,
+  "limit": 50
+}
+```
+
+### 19. 문서별 엔티티 조회
+```
+GET /documents/{document_id}/entities
+Authorization: Bearer <access_token>
+
+Response 200:
+{
+  "document_id": "uuid",
+  "entities": [
+    {
+      "name": "GPT-4",
+      "type": "MODEL",
+      "source_chunk_id": "chunk_uuid"
+    },
+    {
+      "name": "Transformer",
+      "type": "TECHNIQUE",
+      "source_chunk_id": "chunk_uuid"
+    }
+  ],
+  "total": 25
+}
+```
+
+---
+
+*Last Updated: 2026-02-18*

@@ -220,7 +220,7 @@ MIT License - see [LICENSE](LICENSE) file for details
 
 ## 🤝 Contributing
 
-This is currently a Phase 1 MVP. Contributions will be welcome in future phases.
+This is currently a Phase 2 MVP. Contributions will be welcome in future phases.
 
 ## 📧 Contact
 
@@ -229,4 +229,4 @@ For questions or issues, please check the documentation or create an issue.
 ---
 
 **Version**: 0.2.0 (Phase 2)
-**Last Updated**: 2026-02-16
+**Last Updated**: 2026-02-18

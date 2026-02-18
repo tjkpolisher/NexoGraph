@@ -106,9 +106,8 @@ pytest tests/e2e/ -v -m asyncio
 
 ### 문서
 - ✅ `docs/guides/testing.md` - 테스트 실행 가이드
-- ✅ `RATE_LIMIT_E2E_TESTS.md` - 상세 설명
-- ✅ `E2E_TESTS_IMPLEMENTATION_COMPLETE.md` - 구현 완료 보고서
-- ✅ `QUICK_START_E2E_TESTS.md` - 이 파일
+- ✅ `docs/guides/rate-limit-e2e-tests.md` - 상세 설명
+- ✅ `docs/guides/quick-start-e2e-tests.md` - 이 파일
 
 ---
 
@@ -281,11 +280,10 @@ async def test_metrics():
 
 ## 📞 추가 정보
 
-- **상세 가이드**: `RATE_LIMIT_E2E_TESTS.md` 참고
-- **구현 보고서**: `E2E_TESTS_IMPLEMENTATION_COMPLETE.md` 참고
+- **상세 가이드**: `docs/guides/rate-limit-e2e-tests.md` 참고
 - **테스트 가이드**: `docs/guides/testing.md` 참고
 
 ---
 
 *Quick Start Guide v1.0*
-*Last Updated: 2026-01-29*
+*Last Updated: 2026-02-18*
