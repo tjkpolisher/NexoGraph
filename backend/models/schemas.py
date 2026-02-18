@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field, field_validator
 # ============================================================================
 
 DocumentCategory = Literal["paper", "blog", "documentation"]
-QueryMode = Literal["local", "global", "hybrid", "naive"]
+QueryMode = Literal["local", "global", "hybrid", "naive", "mix"]
 ServiceStatus = Literal["connected", "disconnected", "configured", "unconfigured", "initialized", "not_initialized"]
 OverallStatus = Literal["healthy", "degraded", "unhealthy"]
 ProcessingStatus = Literal["processing", "completed", "failed"]
@@ -41,7 +41,7 @@ class HealthResponse(BaseModel):
     )
     version: str = Field(
         description="Application version",
-        examples=["0.1.0"]
+        examples=["0.2.0"]
     )
     services: dict[str, ServiceStatus] = Field(
         description="Status of each service component",
@@ -57,7 +57,7 @@ class HealthResponse(BaseModel):
         json_schema_extra = {
             "example": {
                 "status": "healthy",
-                "version": "0.1.0",
+                "version": "0.2.0",
                 "services": {
                     "qdrant": "connected",
                     "upstage": "configured",

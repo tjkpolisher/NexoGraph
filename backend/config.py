@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     # Application Configuration
     app_env: str = "development"
     app_debug: bool = True
-    app_version: str = "0.1.0"
+    app_version: str = "0.2.0"
 
     # Database Configuration
     database_url: str = "sqlite:///./data/db/nexograph.db"
